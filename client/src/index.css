@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply scroll-smooth;
+  }
+  
+  body {
+    @apply bg-night-950 text-white;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-night-900;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-night-700 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-night-600;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply bg-noctis-600 hover:bg-noctis-500 text-white shadow-lg 
+           shadow-noctis-600/20 hover:shadow-noctis-500/30;
+  }
+
+  .btn-secondary {
+    @apply bg-night-800 hover:bg-night-700 text-white border border-night-700;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-500 text-white shadow-lg 
+           shadow-red-600/20 hover:shadow-red-500/30;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent hover:bg-night-800 text-night-300 hover:text-white;
+  }
+
+  .input {
+    @apply w-full px-4 py-3 bg-night-900 border border-night-700 rounded-lg
+           text-white placeholder-night-500 focus:outline-none focus:ring-2 
+           focus:ring-noctis-500 focus:border-transparent transition-all;
+  }
+
+  .card {
+    @apply bg-night-900/50 backdrop-blur-sm border border-night-800 rounded-xl p-6;
+  }
+
+  .glass {
+    @apply bg-night-900/30 backdrop-blur-xl border border-night-800/50;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-noctis-400 to-noctis-600;
+  }
+
+  .glow-sm {
+    box-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
+  }
+
+  .glow-md {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+  }
+
+  .glow-lg {
+    box-shadow: 0 0 30px rgba(99, 102, 241, 0.5);
+  }
+
+  .glow-red {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
+  }
+
+  .glow-orange {
+    box-shadow: 0 0 20px rgba(249, 115, 22, 0.5);
+  }
+
+  .glow-green {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+  }
+}
+
+.leaflet-container {
+  @apply bg-night-950 rounded-xl;
+}
+
+.leaflet-tile-pane {
+  filter: brightness(0.6) saturate(0.8) contrast(1.1);
+}
+
+.leaflet-control-zoom {
+  @apply border-night-700 !important;
+}
+
+.leaflet-control-zoom a {
+  @apply bg-night-800 text-white border-night-700 hover:bg-night-700 !important;
+}
+
+.leaflet-popup-content-wrapper {
+  @apply bg-night-900 text-white border border-night-700 rounded-lg !important;
+}
+
+.leaflet-popup-tip {
+  @apply bg-night-900 !important;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
