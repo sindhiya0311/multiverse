@@ -50,7 +50,7 @@ initializeSocket(io);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 const startServer = async () => {
   try {
@@ -67,7 +67,7 @@ const startServer = async () => {
 ║   ██║ ╚████║╚██████╔╝╚██████╗   ██║   ██║███████║          ║
 ║   ╚═╝  ╚═══╝ ╚═════╝  ╚═════╝   ╚═╝   ╚═╝╚══════╝          ║
 ║                                                            ║
-║   Predictive Night Safety OS                               ║
+║   Predictive Night Safety Software                         ║
 ║                                                            ║
 ╠════════════════════════════════════════════════════════════╣
 ║   Server running on port ${PORT}                              ║

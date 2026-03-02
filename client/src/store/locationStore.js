@@ -51,7 +51,7 @@ export const useLocationStore = create((set, get) => ({
       {
         enableHighAccuracy: true,
         maximumAge: 0,
-        timeout: 5000,
+        timeout: 10000,
       }
     );
 
