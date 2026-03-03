@@ -9,6 +9,9 @@ import { FAMILY_REQUEST_STATUS } from '../config/constants.js';
 
 const connectedUsers = new Map();
 const userSockets = new Map();
+const recentLocationUpdates = new Map(); // Deduplication: userId -> {key, time}
+const locationUpdateCounts = new Map(); // Rate limit: userId -> {count, resetAt}
+const LOCATION_UPDATE_RATE_LIMIT = 5; // max per second per user
 
 export const initializeSocket = (io) => {
   alertEngine.setSocketIO(io);
@@ -29,11 +32,19 @@ export const initializeSocket = (io) => {
     });
     userSockets.set(socket.id, userId);
 
+    // Join personal room (consolidate multiple connections)
     socket.join(`user:${userId}`);
+
+    // Track socket in per-user set to prevent duplicate broadcasts
+    if (!connectedUsers.get(userId).sockets) {
+      connectedUsers.get(userId).sockets = new Set();
+    }
+    connectedUsers.get(userId).sockets.add(socket.id);
 
     if (user.role === 'admin') {
       socket.join('admin:alerts');
       socket.join('admin:dashboard');
+      console.log(`Admin connected: ${user.name}`);
     }
 
     await User.findByIdAndUpdate(userId, {
@@ -45,8 +56,45 @@ export const initializeSocket = (io) => {
 
     socket.on('location:update', async (data) => {
       try {
-        // NEW: Use DataProcessor to orchestrate all location processing
-        const result = await dataProcessor.processLocationUpdate(userId, data);
+        // Validate payload before processing
+        const lat = parseFloat(data?.latitude);
+        const lon = parseFloat(data?.longitude);
+        if (Number.isNaN(lat) || Number.isNaN(lon)) {
+          socket.emit('error', { message: 'Invalid location data' });
+          return;
+        }
+
+        // DEDUPLICATION: Check if this exact update was just processed
+        const lastUpdate = recentLocationUpdates.get(userId);
+        const ts = data?.timestamp ?? Date.now();
+        const currentKey = `${lat.toFixed(6)}_${lon.toFixed(6)}_${ts}`;
+
+        if (lastUpdate && lastUpdate.key === currentKey && Date.now() - lastUpdate.time < 1000) {
+          return;
+        }
+
+        const now = Date.now();
+        const limit = locationUpdateCounts.get(userId);
+        if (limit) {
+          if (now >= limit.resetAt) {
+            locationUpdateCounts.set(userId, { count: 1, resetAt: now + 1000 });
+          } else if (limit.count >= LOCATION_UPDATE_RATE_LIMIT) {
+            return;
+          } else {
+            limit.count++;
+          }
+        } else {
+          locationUpdateCounts.set(userId, { count: 1, resetAt: now + 1000 });
+        }
+
+        recentLocationUpdates.set(userId, { key: currentKey, time: now });
+
+        const result = await dataProcessor.processLocationUpdate(userId, {
+          ...data,
+          latitude: lat,
+          longitude: lon,
+          timestamp: typeof ts === 'string' ? new Date(ts) : ts,
+        });
 
         if (!result.success) {
           socket.emit('error', {
@@ -62,12 +110,18 @@ export const initializeSocket = (io) => {
 
     socket.on('sos:trigger', async (data) => {
       try {
-        const { latitude, longitude, message } = data;
+        const lat = parseFloat(data?.latitude);
+        const lon = parseFloat(data?.longitude);
+        if (Number.isNaN(lat) || Number.isNaN(lon)) {
+          socket.emit('error', { message: 'Invalid location for SOS' });
+          return;
+        }
+        const message = typeof data?.message === 'string' ? data.message.slice(0, 500) : '';
 
         const alert = await alertEngine.triggerSOS(
           userId,
-          { latitude, longitude },
-          message || ''
+          { latitude: lat, longitude: lon },
+          message
         );
 
         socket.emit('sos:confirmed', {
@@ -83,7 +137,11 @@ export const initializeSocket = (io) => {
 
     socket.on('alert:acknowledge', async (data) => {
       try {
-        const { alertId } = data;
+        const alertId = data?.alertId;
+        if (!alertId || typeof alertId !== 'string') {
+          socket.emit('error', { message: 'Invalid alert ID' });
+          return;
+        }
         await alertEngine.acknowledgeAlert(alertId, userId);
         socket.emit('alert:acknowledged', { alertId });
       } catch (error) {
@@ -94,8 +152,14 @@ export const initializeSocket = (io) => {
 
     socket.on('alert:resolve', async (data) => {
       try {
-        const { alertId, resolution, notes } = data;
-        await alertEngine.resolveAlert(alertId, userId, resolution || 'safe', notes || '');
+        const alertId = data?.alertId;
+        if (!alertId || typeof alertId !== 'string') {
+          socket.emit('error', { message: 'Invalid alert ID' });
+          return;
+        }
+        const resolution = data?.resolution ?? 'safe';
+        const notes = typeof data?.notes === 'string' ? data.notes.slice(0, 500) : '';
+        await alertEngine.resolveAlert(alertId, userId, resolution, notes);
         socket.emit('alert:resolved', { alertId });
       } catch (error) {
         console.error('Alert resolve error:', error);
@@ -120,6 +184,7 @@ export const initializeSocket = (io) => {
 
       connectedUsers.delete(userId);
       userSockets.delete(socket.id);
+      locationUpdateCounts.delete(userId);
 
       await User.findByIdAndUpdate(userId, {
         isOnline: false,
@@ -148,10 +213,8 @@ async function broadcastToFamily(io, userId, event, data) {
       ? conn.recipient.toString()
       : conn.requester.toString();
 
-    const memberSocket = connectedUsers.get(memberId);
-    if (memberSocket) {
-      io.to(memberSocket.socketId).emit(event, data);
-    }
+    // Use room broadcast for multi-tab support
+    io.to(`user:${memberId}`).emit(event, data);
   }
 }
 

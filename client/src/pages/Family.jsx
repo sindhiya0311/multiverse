@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useFamilyStore } from '../store/familyStore';
 import { RiskMeter, StatusBadge, NightModeIndicator } from '../components';
+import { getSocket } from '../services/socket';
+import api from '../services/api';
 import {
   UserPlus,
   Users,
@@ -12,7 +14,7 @@ import {
   Settings,
   Loader2,
 } from 'lucide-react';
-import { formatRelativeTime } from '../utils/helpers';
+import { formatRelativeTime, getProximityContext } from '../utils/helpers';
 import toast from 'react-hot-toast';
 
 const Family = () => {
@@ -34,12 +36,47 @@ const Family = () => {
   const [email, setEmail] = useState('');
   const [relationship, setRelationship] = useState('Family');
   const [isSending, setIsSending] = useState(false);
+  const [taggedLocations, setTaggedLocations] = useState([]);
+
+  // Real-time family member updates
+  const [memberUpdates, setMemberUpdates] = useState({});
 
   useEffect(() => {
     fetchFamilyMembers();
     fetchPendingRequests();
     fetchSentRequests();
-  }, []);
+    fetchTaggedLocations();
+
+    // Set up socket listeners for real-time updates
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handleMemberUpdate = (update) => {
+      setMemberUpdates((prev) => ({
+        ...prev,
+        [update.userId]: update,
+      }));
+    };
+
+    socket.on('family:member:update', handleMemberUpdate);
+    socket.on('user:update', handleMemberUpdate);
+
+    return () => {
+      if (socket) {
+        socket.off('family:member:update', handleMemberUpdate);
+        socket.off('user:update', handleMemberUpdate);
+      }
+    };
+  }, [fetchFamilyMembers, fetchPendingRequests, fetchSentRequests]);
+
+  const fetchTaggedLocations = async () => {
+    try {
+      const response = await api.get('/tagged-locations');
+      setTaggedLocations(response.data.data.locations || []);
+    } catch (error) {
+      console.error('Failed to fetch tagged locations:', error);
+    }
+  };
 
   const handleSendRequest = async (e) => {
     e.preventDefault();
@@ -217,6 +254,8 @@ const Family = () => {
                 <FamilyMemberCard
                   key={member.connectionId}
                   member={member}
+                  liveUpdate={memberUpdates[member.member._id]}
+                  taggedLocations={taggedLocations}
                   onRemove={() =>
                     handleRemove(member.connectionId, member.member.name)
                   }
@@ -297,8 +336,22 @@ const Family = () => {
   );
 };
 
-const FamilyMemberCard = ({ member, onRemove }) => {
+const FamilyMemberCard = ({ member, liveUpdate, taggedLocations, onRemove }) => {
   const { member: m, relationship, connectedAt } = member;
+  
+  // Use live update if available, otherwise use stored member data
+  const displayData = {
+    riskScore: liveUpdate?.riskScore ?? m.currentRiskScore ?? 0,
+    isNightModeActive: liveUpdate?.isNightMode ?? m.isNightModeActive ?? false,
+    isOnline: liveUpdate?.isOnline ?? m.isOnline ?? false,
+    lastSeen: liveUpdate?.lastLocationUpdateAt ?? m.lastSeen,
+    status: liveUpdate?.status ?? m.currentStatus ?? 'Unknown',
+    name: m.name,
+    location: liveUpdate?.location ?? m.lastKnownLocation,
+  };
+
+  // Get location context if member has a location
+  const proximityContext = getProximityContext(displayData.location, taggedLocations);
 
   return (
     <div className="p-4 bg-night-800/50 rounded-lg border border-night-700">
@@ -306,16 +359,16 @@ const FamilyMemberCard = ({ member, onRemove }) => {
         <div className="flex items-center gap-3">
           <div className="relative">
             <div className="w-12 h-12 rounded-full bg-gradient-to-br from-noctis-500 to-noctis-700 flex items-center justify-center text-white font-medium text-lg">
-              {m.name?.charAt(0).toUpperCase()}
+              {displayData.name?.charAt(0).toUpperCase()}
             </div>
             <div
               className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-night-800 ${
-                m.isOnline ? 'bg-green-500' : 'bg-night-600'
+                displayData.isOnline ? 'bg-green-500' : 'bg-night-600'
               }`}
             />
           </div>
           <div>
-            <p className="font-semibold text-white">{m.name}</p>
+            <p className="font-semibold text-white">{displayData.name}</p>
             <p className="text-sm text-night-400">{relationship}</p>
           </div>
         </div>
@@ -327,27 +380,37 @@ const FamilyMemberCard = ({ member, onRemove }) => {
         </button>
       </div>
 
+      {proximityContext && (
+        <div className="mb-3 p-2 bg-noctis-600/20 border border-noctis-600/50 rounded-lg">
+          <p className={`text-sm font-medium ${
+            proximityContext.type === 'at' ? 'text-noctis-300' : 'text-blue-400'
+          }`}>
+            📍 {proximityContext.label}
+          </p>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-3">
-        <StatusBadge status={m.currentStatus || 'Unknown'} className="text-xs" />
-        {m.isNightModeActive && <NightModeIndicator isActive className="text-xs" />}
+        <StatusBadge status={displayData.status} className="text-xs" />
+        {displayData.isNightModeActive && <NightModeIndicator isActive className="text-xs" />}
       </div>
 
       <div className="flex items-center justify-between pt-3 border-t border-night-700">
         <div>
           <p className="text-xs text-night-500">Risk Score</p>
           <p className="text-lg font-bold text-white">
-            {m.currentRiskScore || 0}
+            {displayData.riskScore}
           </p>
         </div>
-        <RiskMeter score={m.currentRiskScore || 0} size="sm" showLabel={false} />
+        <RiskMeter score={displayData.riskScore} size="sm" showLabel={false} />
       </div>
 
       <div className="mt-3 pt-3 border-t border-night-700">
         <p className="text-xs text-night-500">
-          {m.isOnline
+          {displayData.isOnline
             ? 'Currently online'
-            : m.lastSeen
-            ? `Last seen ${formatRelativeTime(m.lastSeen)}`
+            : displayData.lastSeen
+            ? `Last seen ${formatRelativeTime(displayData.lastSeen)}`
             : 'Never seen'}
         </p>
       </div>

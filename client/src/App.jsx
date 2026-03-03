@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import MainLayout from './layouts/MainLayout';
+import LoadingScreen from './components/LoadingScreen';
 import AuthLayout from './layouts/AuthLayout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -35,8 +37,14 @@ const PublicRoute = ({ children }) => {
 };
 
 function App() {
+  const [showLoading, setShowLoading] = useState(true);
+
   return (
-    <Routes>
+    <>
+      {showLoading && (
+        <LoadingScreen minDuration={1000} onComplete={() => setShowLoading(false)} />
+      )}
+      <Routes>
       <Route element={<AuthLayout />}>
         <Route
           path="/login"
@@ -102,6 +110,7 @@ function App() {
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
+    </>
   );
 }
 

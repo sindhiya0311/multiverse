@@ -18,6 +18,12 @@ const SOSButton = ({ className }) => {
   const HOLD_DURATION = 2000;
 
   const startHold = () => {
+    // Require current location
+    if (!currentLocation) {
+      toast.error('Location tracking must be active to use SOS');
+      return;
+    }
+
     setIsHolding(true);
     setHoldProgress(0);
 
@@ -28,27 +34,39 @@ const SOSButton = ({ className }) => {
       setHoldProgress(progress);
     }, 50);
 
-    holdTimerRef.current = setTimeout(async () => {
-      setIsTriggering(true);
-      
-      const location = currentLocation || {
-        latitude: 0,
-        longitude: 0,
-      };
-
-      const result = await triggerSOS(location);
-      
-      if (result.success) {
-        toast.success('SOS alert sent to your family!');
-      } else {
-        toast.error(result.message || 'Failed to send SOS');
-      }
-
-      setIsTriggering(false);
-      setIsHolding(false);
-      setHoldProgress(0);
+    holdTimerRef.current = setTimeout(() => {
+      // Directly trigger SOS after 2 seconds
+      triggerSOSAlert();
     }, HOLD_DURATION);
   };
+
+  const triggerSOSAlert = async () => {
+    setIsTriggering(true);
+    
+    const location = currentLocation || {
+      latitude: 0,
+      longitude: 0,
+    };
+
+    const result = await triggerSOS(location, 'Emergency assistance needed');
+    
+    if (result.success) {
+      toast.success('🚨 SOS alert sent to your family!');
+      setIsHolding(false);
+      setHoldProgress(0);
+    } else {
+      toast.error(result.message || 'Failed to send SOS');
+    }
+
+    setIsTriggering(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+      if (progressTimerRef.current) clearInterval(progressTimerRef.current);
+    };
+  }, []);
 
   const cancelHold = () => {
     if (holdTimerRef.current) {
@@ -61,13 +79,7 @@ const SOSButton = ({ className }) => {
     setHoldProgress(0);
   };
 
-  useEffect(() => {
-    return () => {
-      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
-      if (progressTimerRef.current) clearInterval(progressTimerRef.current);
-    };
-  }, []);
-
+  // SOS Button - triggers directly after 2 second hold
   return (
     <div className={clsx('relative', className)}>
       <button
@@ -76,16 +88,19 @@ const SOSButton = ({ className }) => {
         onMouseLeave={cancelHold}
         onTouchStart={startHold}
         onTouchEnd={cancelHold}
-        disabled={isTriggering}
+        disabled={isTriggering || !currentLocation}
         className={clsx(
           'relative w-24 h-24 rounded-full flex items-center justify-center',
           'bg-gradient-to-br from-red-600 to-red-700',
           'shadow-lg shadow-red-600/30 hover:shadow-red-600/50',
           'transition-all duration-200',
           'focus:outline-none focus:ring-4 focus:ring-red-500/50',
+          'disabled:opacity-50 disabled:cursor-not-allowed',
           isHolding && 'scale-95',
-          isTriggering && 'opacity-50 cursor-not-allowed'
+          isTriggering && 'opacity-50 cursor-not-allowed',
+          !currentLocation && 'opacity-60'
         )}
+        title={!currentLocation ? 'Enable location tracking to use SOS' : 'Hold 2 sec to send SOS'}
       >
         {isHolding && (
           <svg
@@ -129,7 +144,7 @@ const SOSButton = ({ className }) => {
       </button>
       
       <p className="text-center text-xs text-night-500 mt-2">
-        Hold for 2 seconds
+        {!currentLocation ? 'Enable tracking' : 'Hold 2 sec'}
       </p>
     </div>
   );

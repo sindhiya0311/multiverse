@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '../store/authStore';
+import { useDemoStore } from '../store/demoStore';
 import { useLocationStore } from '../store/locationStore';
 import { useFamilyStore } from '../store/familyStore';
 import { useAlertStore } from '../store/alertStore';
@@ -19,6 +20,7 @@ import { Users, MapPin, Activity, Bell } from 'lucide-react';
 
 const Dashboard = () => {
   const { user } = useAuthStore();
+  const { demoMode } = useDemoStore();
   const { currentLocation, riskData, contextData, startTracking, stopTracking } =
     useLocationStore();
   const { familyMembers, fetchFamilyMembers } = useFamilyStore();
@@ -27,6 +29,7 @@ const Dashboard = () => {
   const [isTracking, setIsTracking] = useState(false);
   const [emergencyAlert, setEmergencyAlert] = useState(null);
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
+  const [dismissedAlerts, setDismissedAlerts] = useState(new Set());
 
   useEffect(() => {
     fetchFamilyMembers();
@@ -38,7 +41,6 @@ const Dashboard = () => {
 
     // Listen for RED alerts from server
     socket.on('alert:red', (alertData) => {
-      console.log('🔴 RED ALERT received:', alertData);
       setEmergencyAlert(alertData);
       setShowEmergencyModal(true);
       
@@ -107,22 +109,22 @@ const Dashboard = () => {
     
     try {
       // Trigger SOS through API
-      const response = await api.post('/alerts/sos', {
+      await api.post('/alerts/sos', {
         latitude: emergencyAlert.location.latitude,
         longitude: emergencyAlert.location.longitude,
         message: 'Emergency alert confirmed - immediate response needed',
       });
-      
-      console.log('SOS triggered:', response.data);
-      
-      // In production, integrate with calling service
+
       if (memberId) {
-        console.log('Would call family member:', memberId);
         // Call implementation here
       }
     } catch (error) {
       console.error('Failed to trigger SOS:', error);
     }
+  };
+
+  const handleDismissAlert = (alertId) => {
+    setDismissedAlerts((prev) => new Set([...prev, alertId]));
   };
 
   const riskScore = riskData?.score || user?.currentRiskScore || 0;
@@ -151,6 +153,11 @@ const Dashboard = () => {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {demoMode && (
+              <span className="px-2 py-1 rounded-md text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                Demo Mode
+              </span>
+            )}
             <NightModeIndicator isActive={isNightMode} />
             <button
               onClick={toggleTracking}
@@ -163,9 +170,16 @@ const Dashboard = () => {
 
         {familyAlerts.length > 0 && (
           <div className="space-y-2">
-            {familyAlerts.slice(0, 3).map((alert) => (
-              <AlertBanner key={alert._id} alert={alert} />
-            ))}
+            {familyAlerts
+              .filter((alert) => !dismissedAlerts.has(alert._id))
+              .slice(0, 3)
+              .map((alert) => (
+                <AlertBanner
+                  key={alert._id}
+                  alert={alert}
+                  onDismiss={() => handleDismissAlert(alert._id)}
+                />
+              ))}
           </div>
         )}
 
@@ -190,7 +204,7 @@ const Dashboard = () => {
               <h2 className="text-lg font-semibold text-white mb-4 self-start">
                 Risk Score
               </h2>
-              <RiskMeter score={riskScore} size="lg" />
+              <RiskMeter score={riskScore} size="lg" smoothTransition={demoMode} />
               {riskData?.breakdown && (
                 <div className="w-full mt-6">
                   <RiskBreakdown breakdown={riskData.breakdown} />

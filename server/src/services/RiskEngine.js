@@ -73,6 +73,43 @@ class RiskEngine {
       
       const anomalies = [];
       
+      // Check for GPS teleportation (impossible jump)
+      // Compare current with PREVIOUS point (index -2), not the one we just pushed
+      let isTeleportation = false;
+      if (previousLocations.length >= 2) {
+        const prevLoc = previousLocations[previousLocations.length - 2];
+        const prevTs = prevLoc.timestamp || Date.now();
+        const currTs = currentLocation.timestamp ? new Date(currentLocation.timestamp).getTime() : Date.now();
+        const timeDiffSec = Math.max(0.1, (currTs - prevTs) / 1000);
+        const distance = this.haversineDistance(
+          prevLoc.latitude,
+          prevLoc.longitude,
+          currentLocation.latitude,
+          currentLocation.longitude
+        );
+        
+        // Impossible speed check: >1000 km/h = GPS glitch
+        const speedMps = distance / timeDiffSec;
+        const speedKmh = speedMps * 3.6;
+        
+        if (speedKmh > 1000) {
+          isTeleportation = true;
+          console.warn(`GPS teleportation detected: ${speedKmh.toFixed(0)} km/h, ignoring this update`);
+          return {
+            score: 0,
+            baseScore: 0,
+            breakdown,
+            anomalies: [],
+            alertLevel: 'safe',
+            isNightMode,
+            anomalyCount: 0,
+            multipleAnomalyCategories: false,
+            timestamp: new Date(),
+            warning: 'GPS_GLITCH_DETECTED',
+          };
+        }
+      }
+      
       // 1. ROUTE DEVIATION SCORE (0-30)
       if (previousLocations.length >= 3) {
         breakdown.routeDeviation = await this.calculateRouteDeviation(
@@ -158,16 +195,29 @@ class RiskEngine {
    * Build expected route from historical trips.
    * Compute perpendicular distance from corridor.
    * Calculate deviation percentage.
+   * 
+   * Filter out single bad GPS points to reduce false positives.
    */
   async calculateRouteDeviation(userIdStr, currentLocation, previousLocations, anomalies) {
     try {
-      // Need minimum 5 historical points
+      // Need minimum 5 historical points for reliable route
       if (previousLocations.length < 5) {
         return 0;
       }
       
-      // Build route corridor from last 10 points
-      const routePoints = previousLocations.slice(-10).map(loc => ({
+      // Filter out points with very poor accuracy (>500m likely GPS noise)
+      const qualityPoints = previousLocations.filter(loc => 
+        (loc.accuracy !== undefined && loc.accuracy <= 500) || loc.accuracy === undefined
+      );
+      
+      // If too many points filtered, route is unreliable
+      if (qualityPoints.length < 3) {
+        console.warn('Insufficient quality GPS points for route deviation');
+        return 0;
+      }
+      
+      // Build route corridor from last 10 good quality points
+      const routePoints = qualityPoints.slice(-10).map(loc => ({
         latitude: loc.latitude,
         longitude: loc.longitude,
       }));
@@ -197,7 +247,7 @@ class RiskEngine {
       const deviationPercent = (minDistance / corridorWidth) * 100;
       const clampedDeviation = Math.min(100, deviationPercent);
       
-      // Apply thresholds
+      // Apply thresholds - require stronger deviation to trigger
       let score = 0;
       if (clampedDeviation < 10) {
         score = 0;
@@ -209,7 +259,7 @@ class RiskEngine {
         score = 30;
       }
       
-      // Record anomaly if significant deviation
+      // Record anomaly only if strong and consistent deviation
       if (score >= 20) {
         anomalies.push({
           type: 'route_deviation',
@@ -232,6 +282,7 @@ class RiskEngine {
    * 
    * Detect if speed < 2 km/h (stationary).
    * Track duration in unknown zones.
+   * Reset tracking when user moves OR at day boundary.
    */
   async calculateStopDurationScore(userIdStr, currentLocation, previousLocations, anomalies) {
     try {
@@ -259,9 +310,23 @@ class RiskEngine {
         // Track stop duration in unknown zone
         const stopInfo = this.userStopInfo.get(userIdStr) || {
           startTime: Date.now(),
+          startDate: new Date().toDateString(), // Track date for daily reset
           latitude: currentLocation.latitude,
           longitude: currentLocation.longitude,
         };
+        
+        // Reset stop if it's a new day
+        const currentDate = new Date().toDateString();
+        if (stopInfo.startDate !== currentDate) {
+          // New day, reset stop tracking
+          this.userStopInfo.set(userIdStr, {
+            startTime: Date.now(),
+            startDate: currentDate,
+            latitude: currentLocation.latitude,
+            longitude: currentLocation.longitude,
+          });
+          return 0;
+        }
         
         const stopDurationMinutes = (Date.now() - stopInfo.startTime) / (1000 * 60);
         
@@ -306,16 +371,19 @@ class RiskEngine {
    * 
    * Maintain rolling speed array (last 10 samples).
    * Calculate variance for erratic detection.
+   * Filter out normal acceleration patterns.
    */
   calculateSpeedEntropy(userIdStr, currentSpeed, anomalies) {
     try {
-      // Initialize speed buffer
+      // Clamp negative speed (invalid GPS data)
+      const speed = Math.max(0, parseFloat(currentSpeed) || 0);
+
       if (!this.userSpeedBuffer.has(userIdStr)) {
         this.userSpeedBuffer.set(userIdStr, []);
       }
-      
+
       const speedBuffer = this.userSpeedBuffer.get(userIdStr);
-      speedBuffer.push(currentSpeed || 0);
+      speedBuffer.push(speed);
       
       // Keep only last 10 samples
       if (speedBuffer.length > 10) {
@@ -330,23 +398,36 @@ class RiskEngine {
       // Calculate variance
       const variance = this.calculateVariance(speedBuffer);
       
+      // High variance can be normal acceleration, require very high variance for anomaly
+      // Normal acceleration 0→60 km/h over 5 seconds = moderate variance
+      // Erratic = rapid speed changes back and forth
       let score = 0;
-      if (variance >= 50) {
+      if (variance >= 100) {
+        // Very high variance = likely erratic movement
         score = 20;
-      } else if (variance >= 20) {
+      } else if (variance >= 60) {
+        // High variance = possibly erratic
         score = 10;
       } else {
         score = 0;
       }
       
-      // Record anomaly if erratic
-      if (score >= 10) {
-        anomalies.push({
-          type: 'speed_entropy',
-          severity: score >= 15 ? 'high' : 'medium',
-          description: `Erratic speed pattern: variance ${variance.toFixed(2)}`,
-          value: variance,
-        });
+      // Record anomaly only if very erratic (high variance sustained)
+      if (score >= 10 && variance >= 60) {
+        // Check if it's sustained erratic pattern (not just one acceleration)
+        const last5 = speedBuffer.slice(-5);
+        const last5Variance = this.calculateVariance(last5);
+        
+        if (last5Variance > 40) {
+          anomalies.push({
+            type: 'speed_entropy',
+            severity: score >= 15 ? 'high' : 'medium',
+            description: `Erratic speed pattern: variance ${variance.toFixed(2)}`,
+            value: variance,
+          });
+        } else {
+          score = 0; // Normal acceleration, not sustained erratic
+        }
       }
       
       return score;
@@ -405,24 +486,25 @@ class RiskEngine {
   /**
    * 5️⃣ NIGHT MODE AMPLIFIER
    * 
-   * 22:00-24:00 → 1.2x
-   * 00:00-04:00 → 1.5x
-   * 04:00-05:00 → 1.3x
+   * 22:00-23:59 → 1.2x (early night) - reduced alertness
+   * 00:00-03:59 → 1.5x (deep night) - highest vulnerability
+   * 04:00-04:59 → 1.3x (late night) - transitions back
+   * 
+   * Only called when isNightMode=true
    */
   getNightMultiplier() {
     const hour = new Date().getHours();
     
-    if (hour >= 22 || hour < 5) {
-      if (hour >= 22) {
-        return 1.2; // 22-24
-      } else if (hour < 4) {
-        return 1.5; // 00-04
-      } else {
-        return 1.3; // 04-05
-      }
+    if (hour >= 22) {
+      return 1.2; // 22:00-23:59 - early night
+    } else if (hour < 4) {
+      return 1.5; // 00:00-03:59 - deep night (highest risk)
+    } else if (hour < 5) {
+      return 1.3; // 04:00-04:59 - late night
     }
     
-    return 1; // Not night mode
+    // Fallback (shouldn't reach if called only when isNightMode=true)
+    return 1;
   }
 
   /**

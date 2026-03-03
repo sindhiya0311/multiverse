@@ -90,7 +90,7 @@ noctis/
 │   │   └── utils/         # Helper functions
 │   ├── package.json
 │   └── index.html
-│
+│ 
 └── README.md
 ```
 

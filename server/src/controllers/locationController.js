@@ -21,10 +21,10 @@ export const updateLocation = asyncHandler(async (req, res) => {
 
   const previousLocations = await LocationLog.getRecentLogs(userId, 20);
 
-  const riskResult = await riskEngine.calculateRiskScore(
+  const riskResult = await riskEngine.calculateRealTimeRiskScore(
     userId,
     currentLocation,
-    previousLocations
+    false // isNightMode (now properly handled in DataProcessor for socket updates)
   );
 
   const contextResult = await contextEngine.generateStatus(

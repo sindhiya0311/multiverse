@@ -60,7 +60,8 @@
   }
 
   .card {
-    @apply bg-night-900/50 backdrop-blur-sm border border-night-800 rounded-xl p-6;
+    @apply bg-night-900/50 backdrop-blur-sm border border-night-800 rounded-xl p-6
+           transition-shadow duration-300 hover:shadow-lg hover:shadow-night-950/50;
   }
 
   .glass {

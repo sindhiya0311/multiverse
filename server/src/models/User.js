@@ -62,6 +62,14 @@ const userSchema = new mongoose.Schema(
       min: 0,
       max: 100,
     },
+    currentBaseScore: {
+      type: Number,
+      default: 0,
+    },
+    lastLocationUpdateAt: {
+      type: Date,
+      default: null,
+    },
     currentStatus: {
       type: String,
       default: 'Unknown',

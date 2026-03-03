@@ -34,9 +34,10 @@ export const registerValidation = [
     .isLength({ max: 100 })
     .withMessage('Name cannot exceed 100 characters'),
   body('phone')
-    .optional()
-    .matches(/^\+?[\d\s-]{10,}$/)
-    .withMessage('Please provide a valid phone number'),
+    .optional({ values: 'falsy' })
+    .trim()
+    .custom((val) => !val || /^\+?[\d\s-]{10,}$/.test(val))
+    .withMessage('Please provide a valid phone number (min 10 digits)'),
   validate,
 ];
 

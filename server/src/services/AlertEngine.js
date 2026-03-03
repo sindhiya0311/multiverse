@@ -17,7 +17,9 @@ class AlertEngine {
     this.io = null;
     this.activeAlerts = new Map();
     this.lastAlertTime = new Map();
-    this.ALERT_COOLDOWN_MS = 5000; // Prevent spam
+    this.lastOrangeLogTime = new Map();
+    this.ALERT_COOLDOWN_MS = 5000; // Prevent RED alert spam
+    this.ORANGE_LOG_COOLDOWN_MS = 60000; // Prevent orange log spam (1 min)
   }
 
   setSocketIO(io) {
@@ -46,10 +48,13 @@ class AlertEngine {
           this.lastAlertTime.set(userIdStr, Date.now());
         }
       }
-      // ORANGE ALERT: Score ≥60 (no automatic trigger, just logging)
+      // ORANGE ALERT: Score ≥60 (log only, with cooldown to prevent DB spam)
       else if (alertLevel === 'orange') {
-        // Log but don't notify (reduce noise)
-        await this.logWarningAlert(userId, riskData, currentLocation);
+        const lastOrange = this.lastOrangeLogTime.get(userIdStr) || 0;
+        if (Date.now() - lastOrange >= this.ORANGE_LOG_COOLDOWN_MS) {
+          await this.logWarningAlert(userId, riskData, currentLocation);
+          this.lastOrangeLogTime.set(userIdStr, Date.now());
+        }
       }
     } catch (error) {
       console.error('Alert processing error:', error);
@@ -281,11 +286,19 @@ class AlertEngine {
   }
 
   /**
-   * Acknowledge alert
+   * Acknowledge alert - with authorization check
    */
   async acknowledgeAlert(alertId, userId) {
     try {
-      const alert = await Alert.findByIdAndUpdate(
+      const alert = await Alert.findById(alertId);
+      
+      // Security: Verify user owns this alert
+      if (!alert || alert.user.toString() !== userId.toString()) {
+        console.warn(`Unauthorized alert acknowledge attempt: user ${userId} on alert ${alertId}`);
+        throw new Error('Unauthorized');
+      }
+      
+      const updated = await Alert.findByIdAndUpdate(
         alertId,
         {
           status: 'acknowledged',
@@ -295,7 +308,7 @@ class AlertEngine {
         { new: true }
       );
       
-      return alert;
+      return updated;
     } catch (error) {
       console.error('Error acknowledging alert:', error);
       throw error;
@@ -303,11 +316,33 @@ class AlertEngine {
   }
 
   /**
-   * Resolve alert
+   * Resolve alert - with authorization check
    */
   async resolveAlert(alertId, userId, resolution = 'safe', notes = '') {
     try {
-      const alert = await Alert.findByIdAndUpdate(
+      const alert = await Alert.findById(alertId);
+      
+      // Security: Verify user owns this alert OR is family member
+      if (!alert) {
+        throw new Error('Alert not found');
+      }
+      
+      if (alert.user.toString() !== userId.toString()) {
+        // Check if user is family member who can resolve
+        const isFamilyMember = await FamilyConnection.findOne({
+          $or: [
+            { requester: userId, recipient: alert.user, status: FAMILY_REQUEST_STATUS.ACCEPTED },
+            { recipient: userId, requester: alert.user, status: FAMILY_REQUEST_STATUS.ACCEPTED },
+          ],
+        });
+        
+        if (!isFamilyMember) {
+          console.warn(`Unauthorized alert resolution attempt: user ${userId} on alert ${alertId}`);
+          throw new Error('Unauthorized');
+        }
+      }
+      
+      const updated = await Alert.findByIdAndUpdate(
         alertId,
         {
           status: 'resolved',
@@ -320,8 +355,8 @@ class AlertEngine {
       );
       
       // Notify family that alert is resolved
-      if (alert) {
-        const user = alert.user;
+      if (updated) {
+        const user = updated.user;
         
         const familyConnections = await FamilyConnection.find({
           $or: [
@@ -336,14 +371,14 @@ class AlertEngine {
             : connection.requester;
           
           this.io.to(`user:${memberId}`).emit('alert:resolved', {
-            alertId: alert._id,
+            alertId: updated._id,
             resolution: resolution,
             resolvedAt: new Date(),
           });
         }
       }
       
-      return alert;
+      return updated;
     } catch (error) {
       console.error('Error resolving alert:', error);
       throw error;

@@ -10,12 +10,11 @@ export const register = asyncHandler(async (req, res) => {
     throw new AppError('Email already registered', 400);
   }
 
-  const user = await User.create({
-    email,
-    password,
-    name,
-    phone,
-  });
+  const userData = { email, password, name };
+  if (phone && String(phone).trim()) {
+    userData.phone = String(phone).trim();
+  }
+  const user = await User.create(userData);
 
   const token = generateToken(user._id);
 

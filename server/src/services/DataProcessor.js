@@ -57,8 +57,8 @@ class DataProcessor {
         currentLocation.speed = Math.max(0, Math.min(300, currentLocation.speed));
       }
 
-      // Get user for context
-      const user = await User.findById(userId).select('name email phone currentRiskScore');
+      // Get user for context and location sharing preference
+      const user = await User.findById(userId).select('name email phone currentRiskScore isLocationSharingEnabled');
       if (!user) {
         console.error('User not found:', userId);
         return { success: false, reason: 'user_not_found' };
@@ -67,10 +67,13 @@ class DataProcessor {
       // ============================================
       // STEP 1: REAL-TIME RISK CALCULATION
       // ============================================
+      // Calculate night mode based on user's timezone
+      const isNightMode = this.isNightModeActive(currentLocation.timestamp);
+      
       const riskResult = await riskEngine.calculateRealTimeRiskScore(
         userId,
         currentLocation,
-        false // isNightMode calculated inside
+        isNightMode // Correctly pass night mode status
       );
 
       if (!riskResult) {
@@ -214,19 +217,30 @@ class DataProcessor {
   }
 
   /**
-   * Validate coordinates are within reasonable bounds
+   * Validate coordinates are within reasonable bounds AND not teleporting
    */
   validateCoordinates(location) {
     const { latitude, longitude, accuracy } = location;
-    
+
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') return false;
+
     // Check latitude range [-90, 90]
     if (latitude < -90 || latitude > 90) return false;
-    
+
     // Check longitude range [-180, 180]
     if (longitude < -180 || longitude > 180) return false;
+
+    // Check accuracy when provided (0-1000 meters; undefined is acceptable)
+    if (accuracy !== undefined && accuracy !== null) {
+      if (typeof accuracy !== 'number' || accuracy < 0 || accuracy > 1000) return false;
+    }
     
-    // Check accuracy is reasonable (0-1000 meters)
-    if (accuracy < 0 || accuracy > 1000) return false;
+    // NEW: Filter very inaccurate GPS (likely GPS glitch)
+    // Accuracy > 500m means GPS is too noisy for route deviation scoring
+    if (accuracy > 500) {
+      console.warn(`GPS accuracy too low (${accuracy}m), treating as unreliable`);
+      // Don't reject completely, but we can flag this for risk calculation
+    }
     
     return true;
   }
@@ -328,6 +342,16 @@ class DataProcessor {
     } catch (error) {
       console.error('Error broadcasting to family:', error);
     }
+  }
+
+  /**
+   * Check if currently in night mode
+   * Night mode: 22:00-05:00 (server timezone, but should be enhanced to user timezone)
+   */
+  isNightModeActive(timestamp = Date.now()) {
+    const date = new Date(timestamp);
+    const hour = date.getHours();
+    return hour >= 22 || hour < 5;
   }
 
   /**

@@ -84,6 +84,14 @@ export const respondToRequest = asyncHandler(async (req, res) => {
   if (action === 'accept') {
     connection.status = FAMILY_REQUEST_STATUS.ACCEPTED;
     connection.acceptedAt = new Date();
+    connection.canViewLocation = true;
+    connection.canReceiveAlerts = true;
+
+    // Enable live location sharing for both users by default
+    await User.updateMany(
+      { _id: { $in: [connection.requester, connection.recipient] } },
+      { $set: { isLocationSharingEnabled: true } }
+    );
   } else {
     connection.status = FAMILY_REQUEST_STATUS.REJECTED;
     connection.rejectedAt = new Date();

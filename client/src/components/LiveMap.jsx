@@ -75,7 +75,7 @@ const LiveMap = ({
   familyMembers = [],
   taggedLocations = [],
   riskScore = 0,
-  showTaggedRadii = true,
+  showTaggedRadii = false,
   className = '',
 }) => {
   const mapCenter = useMemo(() => {
@@ -160,30 +160,18 @@ const LiveMap = ({
       })}
 
       {currentLocation?.latitude && currentLocation?.longitude && (
-        <>
-          <Circle
-            center={[currentLocation.latitude, currentLocation.longitude]}
-            radius={currentLocation.accuracy || 50}
-            pathOptions={{
-              color: userColor,
-              fillColor: userColor,
-              fillOpacity: 0.15,
-              weight: 1,
-            }}
-          />
-          <Marker
-            position={[currentLocation.latitude, currentLocation.longitude]}
-            icon={userIcon(userColor)}
-          >
-            <Popup>
-              <div className="text-night-900">
-                <strong>You are here</strong>
-                <br />
-                <span className="text-xs">Risk Score: {riskScore}</span>
-              </div>
-            </Popup>
-          </Marker>
-        </>
+        <Marker
+          position={[currentLocation.latitude, currentLocation.longitude]}
+          icon={userIcon(userColor)}
+        >
+          <Popup>
+            <div className="text-night-900">
+              <strong>You</strong>
+              <br />
+              <span className="text-xs">Risk: {riskScore}</span>
+            </div>
+          </Popup>
+        </Marker>
       )}
     </MapContainer>
   );

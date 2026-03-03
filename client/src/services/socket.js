@@ -13,23 +13,26 @@ export const initializeSocket = (token) => {
 
   socket = io('/', {
     auth: { token },
-    transports: ['websocket'],
+    transports: ['websocket', 'polling'],
     reconnection: true,
-    reconnectionAttempts: 5,
+    reconnectionAttempts: 10,
     reconnectionDelay: 1000,
+    reconnectionDelayMax: 10000,
+    timeout: 20000,
   });
 
   socket.on('connect', () => {
-    console.log('Socket connected');
     socket.emit('family:subscribe');
   });
 
   socket.on('disconnect', () => {
-    console.log('Socket disconnected');
+    // Silent - reconnection handled automatically
   });
 
   socket.on('connect_error', (error) => {
-    console.error('Socket connection error:', error);
+    if (error.message?.includes('Invalid token')) {
+      toast.error('Session expired. Please log in again.');
+    }
   });
 
   socket.on('location:processed', (data) => {
@@ -49,9 +52,14 @@ export const initializeSocket = (token) => {
   });
 
   socket.on('family:presence', (data) => {
+    const { familyMembers } = useFamilyStore.getState();
+    const member = familyMembers.find((m) => m.member?.id === data.memberId);
+    const wasOnline = member?.member?.isOnline;
+
     useFamilyStore.getState().updateMemberPresence(data.memberId, data.isOnline);
-    
-    if (data.isOnline) {
+
+    // Only toast when transitioning to online (avoid spam on reconnect)
+    if (data.isOnline && !wasOnline && data.memberName) {
       toast.success(`${data.memberName} is now online`);
     }
   });

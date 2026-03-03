@@ -28,7 +28,7 @@ const RiskBreakdown = ({ breakdown, className }) => {
     },
     {
       label: 'Location Risk',
-      value: breakdown.locationRisk || 0,
+      value: breakdown.locationRiskWeight ?? breakdown.locationRisk ?? 0,
       max: 15,
       icon: MapPin,
       color: 'text-red-400',

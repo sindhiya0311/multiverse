@@ -108,3 +108,42 @@ export const requestNotificationPermission = async () => {
   
   return false;
 };
+
+/**
+ * Check proximity to tagged locations
+ * Returns context message like "At home" or "Near work"
+ */
+export const getProximityContext = (userLocation, taggedLocations = []) => {
+  if (!userLocation || !taggedLocations.length) {
+    return null;
+  }
+
+  const { latitude: userLat, longitude: userLon } = userLocation;
+
+  // Check each tagged location
+  for (const location of taggedLocations) {
+    const distance = calculateDistance(userLat, userLon, location.latitude, location.longitude);
+
+    // Exact location - within 50 meters
+    if (distance <= 50) {
+      return {
+        type: 'at',
+        label: `At ${location.label}`,
+        distance,
+        location,
+      };
+    }
+
+    // Near location - within 200 meters
+    if (distance <= 200) {
+      return {
+        type: 'near',
+        label: `Near ${location.label}`,
+        distance,
+        location,
+      };
+    }
+  }
+
+  return null;
+};

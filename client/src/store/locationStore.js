@@ -33,20 +33,27 @@ export const useLocationStore = create((set, get) => ({
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
+        // Geolocation API returns speed in m/s; server expects km/h
+        const speedMps = position.coords.speed ?? null;
+        const speedKmh = speedMps !== null ? Math.max(0, speedMps * 3.6) : 0;
+
         const location = {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
-          speed: position.coords.speed || 0,
-          accuracy: position.coords.accuracy,
-          heading: position.coords.heading || 0,
-          altitude: position.coords.altitude || 0,
+          speed: speedKmh,
+          accuracy: position.coords.accuracy ?? 100,
+          heading: position.coords.heading ?? 0,
+          altitude: position.coords.altitude ?? 0,
           timestamp: new Date().toISOString(),
         };
-        
+
         set({ currentLocation: location });
       },
       (error) => {
-        console.error('Geolocation error:', error);
+        // Graceful degradation: keep last known location on GPS error
+        if (error.code === error.POSITION_UNAVAILABLE) {
+          set((s) => ({ currentLocation: s.currentLocation }));
+        }
       },
       {
         enableHighAccuracy: true,

@@ -34,6 +34,7 @@ const AdminPanel = () => {
   const [heatmapData, setHeatmapData] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [timeRange, setTimeRange] = useState('24h');
+  const [dismissedAlerts, setDismissedAlerts] = useState(new Set());
 
   useEffect(() => {
     loadData();
@@ -62,6 +63,10 @@ const AdminPanel = () => {
       console.error('Failed to load admin data:', error);
     }
     setIsLoading(false);
+  };
+
+  const handleDismissAlert = (alertId) => {
+    setDismissedAlerts((prev) => new Set([...prev, alertId]));
   };
 
   const SEVERITY_COLORS = {
@@ -353,9 +358,16 @@ const AdminPanel = () => {
             </h2>
             {alerts.length > 0 ? (
               <div className="space-y-3 max-h-[400px] overflow-y-auto">
-                {alerts.slice(0, 10).map((alert) => (
-                  <AlertBanner key={alert._id} alert={alert} />
-                ))}
+                {alerts
+                  .filter((alert) => !dismissedAlerts.has(alert._id))
+                  .slice(0, 10)
+                  .map((alert) => (
+                    <AlertBanner
+                      key={alert._id}
+                      alert={alert}
+                      onDismiss={() => handleDismissAlert(alert._id)}
+                    />
+                  ))}
               </div>
             ) : (
               <div className="text-center py-8">
