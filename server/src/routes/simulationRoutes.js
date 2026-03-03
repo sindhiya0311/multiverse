@@ -28,6 +28,6 @@ router.post('/inject-anomaly', anomalyInjectionValidation, injectAnomaly);
 router.post('/clear-anomaly', clearAnomaly);
 
 router.post('/custom-route', setCustomRoute);
-router.post('/generate-route', generateRandomRoute);
+router.post('/random-route', generateRandomRoute);
 
 export default router;

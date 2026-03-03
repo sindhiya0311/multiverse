@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard';
 import Family from './pages/Family';
 import TaggedLocations from './pages/TaggedLocations';
 import RiskTimeline from './pages/RiskTimeline';
+import Simulation from './pages/Simulation';
 import AdminPanel from './pages/AdminPanel';
 
 const ProtectedRoute = ({ children, adminOnly = false }) => {
@@ -94,6 +95,14 @@ function App() {
           element={
             <ProtectedRoute>
               <RiskTimeline />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/simulation"
+          element={
+            <ProtectedRoute>
+              <Simulation />
             </ProtectedRoute>
           }
         />
