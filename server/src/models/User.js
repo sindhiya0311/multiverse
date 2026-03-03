@@ -104,8 +104,6 @@ const userSchema = new mongoose.Schema(
     toObject: { virtuals: true },
   }
 );
-
-userSchema.index({ email: 1 });
 userSchema.index({ 'lastKnownLocation.latitude': 1, 'lastKnownLocation.longitude': 1 });
 userSchema.index({ isOnline: 1, isNightModeActive: 1 });
 
