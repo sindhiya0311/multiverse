@@ -3,7 +3,7 @@ import { useAuthStore } from '../store/authStore';
 import { useLocationStore } from '../store/locationStore';
 import { useFamilyStore } from '../store/familyStore';
 import { useAlertStore } from '../store/alertStore';
-import { emitLocationUpdate } from '../services/socket';
+import { emitLocationUpdate, getSocket } from '../services/socket';
 import api from '../services/api';
 import {
   RiskMeter,
@@ -13,6 +13,7 @@ import {
   SOSButton,
   LiveMap,
   RiskBreakdown,
+  EmergencyAlertModal,
 } from '../components';
 import { Users, MapPin, Activity, Bell } from 'lucide-react';
 
@@ -21,14 +22,48 @@ const Dashboard = () => {
   const { currentLocation, riskData, contextData, startTracking, stopTracking } =
     useLocationStore();
   const { familyMembers, fetchFamilyMembers } = useFamilyStore();
-  const { familyAlerts, fetchFamilyAlerts } = useAlertStore();
+  const { familyAlerts, fetchFamilyAlerts, addAlert } = useAlertStore();
   const [taggedLocations, setTaggedLocations] = useState([]);
   const [isTracking, setIsTracking] = useState(false);
+  const [emergencyAlert, setEmergencyAlert] = useState(null);
+  const [showEmergencyModal, setShowEmergencyModal] = useState(false);
 
   useEffect(() => {
     fetchFamilyMembers();
     fetchFamilyAlerts(true);
     fetchTaggedLocations();
+
+    const socket = getSocket();
+    if (!socket) return;
+
+    // Listen for RED alerts from server
+    socket.on('alert:red', (alertData) => {
+      console.log('🔴 RED ALERT received:', alertData);
+      setEmergencyAlert(alertData);
+      setShowEmergencyModal(true);
+      
+      // Play notification sound
+      const audio = new Audio('/notification-alert.mp3');
+      audio.play().catch(() => {});
+      
+      // Add to alerts store
+      addAlert({
+        _id: alertData.alertId,
+        type: 'shadow',
+        severity: alertData.severity,
+        riskScore: alertData.riskScore,
+        location: alertData.location,
+        anomalyBreakdown: alertData.anomalyBreakdown,
+        isNightMode: alertData.isNightMode,
+        timestamp: alertData.timestamp,
+        status: 'active',
+      });
+    });
+
+    // Listen for family alerts
+    socket.on('alert:family', (alertData) => {
+      fetchFamilyAlerts(true);
+    });
 
     const alertInterval = setInterval(() => {
       fetchFamilyAlerts(true);
@@ -36,8 +71,12 @@ const Dashboard = () => {
 
     return () => {
       clearInterval(alertInterval);
+      if (socket) {
+        socket.off('alert:red');
+        socket.off('alert:family');
+      }
     };
-  }, []);
+  }, [fetchFamilyMembers, fetchFamilyAlerts, addAlert]);
 
   useEffect(() => {
     if (isTracking && currentLocation) {
@@ -63,12 +102,44 @@ const Dashboard = () => {
     setIsTracking(!isTracking);
   };
 
+  const handleEmergencyCall = async (memberId = null) => {
+    if (!emergencyAlert) return;
+    
+    try {
+      // Trigger SOS through API
+      const response = await api.post('/alerts/sos', {
+        latitude: emergencyAlert.location.latitude,
+        longitude: emergencyAlert.location.longitude,
+        message: 'Emergency alert confirmed - immediate response needed',
+      });
+      
+      console.log('SOS triggered:', response.data);
+      
+      // In production, integrate with calling service
+      if (memberId) {
+        console.log('Would call family member:', memberId);
+        // Call implementation here
+      }
+    } catch (error) {
+      console.error('Failed to trigger SOS:', error);
+    }
+  };
+
   const riskScore = riskData?.score || user?.currentRiskScore || 0;
   const status = contextData?.status || user?.currentStatus || 'Unknown';
   const isNightMode = riskData?.isNightMode || user?.isNightModeActive;
 
   return (
     <div className="min-h-screen p-4 lg:p-6">
+      {/* Emergency Alert Modal */}
+      {showEmergencyModal && emergencyAlert && (
+        <EmergencyAlertModal 
+          alert={emergencyAlert}
+          onDismiss={() => setShowEmergencyModal(false)}
+          onCall={handleEmergencyCall}
+        />
+      )}
+
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>

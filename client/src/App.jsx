@@ -9,7 +9,6 @@ import Family from './pages/Family';
 import TaggedLocations from './pages/TaggedLocations';
 import RiskTimeline from './pages/RiskTimeline';
 import AdminPanel from './pages/AdminPanel';
-import Simulation from './pages/Simulation';
 
 const ProtectedRoute = ({ children, adminOnly = false }) => {
   const { isAuthenticated, user } = useAuthStore();
@@ -87,14 +86,6 @@ function App() {
           element={
             <ProtectedRoute>
               <RiskTimeline />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/simulation"
-          element={
-            <ProtectedRoute>
-              <Simulation />
             </ProtectedRoute>
           }
         />

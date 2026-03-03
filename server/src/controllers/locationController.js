@@ -1,7 +1,7 @@
 import User from '../models/User.js';
 import LocationLog from '../models/LocationLog.js';
 import TaggedLocation from '../models/TaggedLocation.js';
-import { riskEngine, contextEngine, alertService } from '../services/index.js';
+import { riskEngine, contextEngine } from '../services/index.js';
 import { RISK_THRESHOLDS } from '../config/constants.js';
 import { asyncHandler, AppError } from '../middleware/errorHandler.js';
 
@@ -70,9 +70,8 @@ export const updateLocation = asyncHandler(async (req, res) => {
   });
 
   let alert = null;
-  if (riskResult.alertLevel === 'red') {
-    alert = await alertService.triggerShadowAlert(userId, riskResult, currentLocation);
-  }
+  // Alerts are now processed via socket.io in real-time
+  // This REST endpoint is for legacy/fallback support only
 
   res.json({
     success: true,

@@ -5,3 +5,4 @@ export { default as AlertBanner } from './AlertBanner';
 export { default as SOSButton } from './SOSButton';
 export { default as LiveMap } from './LiveMap';
 export { default as RiskBreakdown } from './RiskBreakdown';
+export { default as EmergencyAlertModal } from './EmergencyAlertModal';

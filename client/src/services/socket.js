@@ -127,3 +127,12 @@ export const acknowledgeAlert = (alertId) => {
 };
 
 export const getSocket = () => socket;
+
+export default {
+  initializeSocket,
+  disconnectSocket,
+  emitLocationUpdate,
+  emitSOS,
+  acknowledgeAlert,
+  getSocket,
+};

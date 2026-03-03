@@ -1,29 +1,51 @@
 import User from '../models/User.js';
 import Alert from '../models/Alert.js';
 import LocationLog from '../models/LocationLog.js';
-import { alertService } from '../services/index.js';
+import alertEngine from '../services/AlertEngine.js';
 import { asyncHandler, AppError } from '../middleware/errorHandler.js';
 
 export const getDashboardStats = asyncHandler(async (req, res) => {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  
   const [
     totalUsers,
     activeUsers,
     nightModeUsers,
-    alertStats,
+    alertStatsData,
     recentHighRiskUsers,
   ] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ isOnline: true }),
     User.countDocuments({ isNightModeActive: true, isOnline: true }),
-    alertService.getAlertStats('24h'),
+    Alert.aggregate([
+      {
+        $match: {
+          triggeredAt: { $gte: oneDayAgo },
+        },
+      },
+      {
+        $group: {
+          _id: '$severity',
+          count: { $sum: 1 },
+        },
+      },
+    ]),
     User.find({ currentRiskScore: { $gte: 60 } })
       .select('name email currentRiskScore currentStatus isNightModeActive lastKnownLocation')
       .limit(10)
       .sort({ currentRiskScore: -1 }),
   ]);
+  
+  const alertStats = {
+    total: alertStatsData.reduce((sum, stat) => sum + stat.count, 0),
+    byLevel: alertStatsData.reduce((acc, stat) => {
+      acc[stat._id] = stat.count;
+      return acc;
+    }, {}),
+  };
 
   res.json({
     success: true,

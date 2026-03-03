@@ -12,7 +12,6 @@ import {
   LogOut,
   Moon,
   Shield,
-  Play,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -41,7 +40,6 @@ const MainLayout = () => {
     { name: 'Family', href: '/family', icon: Users },
     { name: 'Locations', href: '/locations', icon: MapPin },
     { name: 'Timeline', href: '/timeline', icon: Activity },
-    { name: 'Simulation', href: '/simulation', icon: Play },
   ];
 
   if (user?.role === 'admin') {

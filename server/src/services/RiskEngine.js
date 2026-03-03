@@ -8,347 +8,537 @@ import LocationLog from '../models/LocationLog.js';
 import TaggedLocation from '../models/TaggedLocation.js';
 import RiskZone from '../models/RiskZone.js';
 
+/**
+ * REAL-TIME RISK ENGINE
+ * 
+ * Computes predictive behavioral safety scores based on:
+ * 1. Route deviation from historical patterns
+ * 2. Stop duration in unknown zones
+ * 3. Speed entropy (erratic movement)
+ * 4. Location risk weight (high-crime zones)
+ * 5. Night mode amplification
+ */
 class RiskEngine {
   constructor() {
-    this.expectedRoutes = new Map();
-    this.userSpeedHistory = new Map();
-    this.userStopInfo = new Map();
-  }
-
-  async calculateRiskScore(userId, currentLocation, previousLocations = []) {
-    const breakdown = {
-      routeDeviation: 0,
-      stopDuration: 0,
-      speedEntropy: 0,
-      locationRisk: 0,
-      nightMultiplier: 1,
-    };
-
-    const anomalies = [];
-
-    breakdown.routeDeviation = await this.calculateRouteDeviationScore(
-      userId,
-      currentLocation,
-      previousLocations,
-      anomalies
-    );
-
-    breakdown.stopDuration = this.calculateStopDurationScore(
-      userId,
-      currentLocation,
-      previousLocations,
-      anomalies
-    );
-
-    breakdown.speedEntropy = await this.calculateSpeedEntropyScore(
-      userId,
-      currentLocation.speed,
-      anomalies
-    );
-
-    breakdown.locationRisk = await this.calculateLocationRiskScore(
-      currentLocation.latitude,
-      currentLocation.longitude,
-      anomalies
-    );
-
-    breakdown.nightMultiplier = this.getNightMultiplier();
-
-    const baseScore =
-      breakdown.routeDeviation +
-      breakdown.stopDuration +
-      breakdown.speedEntropy +
-      breakdown.locationRisk;
-
-    let finalScore = Math.round(baseScore * breakdown.nightMultiplier);
-    finalScore = Math.min(100, Math.max(0, finalScore));
-
-    const alertLevel = this.determineAlertLevel(finalScore, anomalies);
-
-    return {
-      score: finalScore,
-      breakdown,
-      anomalies,
-      alertLevel,
-      isNightMode: breakdown.nightMultiplier > 1,
-      timestamp: new Date(),
-    };
-  }
-
-  async calculateRouteDeviationScore(userId, currentLocation, previousLocations, anomalies) {
-    const expectedRoute = this.expectedRoutes.get(userId.toString());
+    // Rolling window: store last 20 location points per user
+    this.userLocationBuffer = new Map();
     
-    if (!expectedRoute || previousLocations.length < 3) {
-      return 0;
-    }
-
-    const deviationPercent = this.calculateDeviationFromExpectedRoute(
-      currentLocation,
-      expectedRoute
-    );
-
-    let score = 0;
-    for (const threshold of RISK_WEIGHTS.ROUTE_DEVIATION.THRESHOLDS) {
-      if (deviationPercent <= threshold.max) {
-        score = threshold.score;
-        break;
-      }
-    }
-
-    if (score >= 20) {
-      anomalies.push({
-        type: 'route_deviation',
-        severity: score >= 25 ? 'high' : 'medium',
-        description: `Route deviation: ${deviationPercent.toFixed(1)}% from expected path`,
-        value: deviationPercent,
-      });
-    }
-
-    return score;
+    // Track expected routes from historical data
+    this.userRouteClusters = new Map();
+    
+    // Track stop information per user
+    this.userStopInfo = new Map();
+    
+    // Track speed variance per user
+    this.userSpeedBuffer = new Map();
+    
+    // Active anomalies per user
+    this.userAnomalies = new Map();
   }
 
-  calculateDeviationFromExpectedRoute(currentLocation, expectedRoute) {
-    if (!expectedRoute || expectedRoute.length < 2) return 0;
-
-    let minDistance = Infinity;
-    for (const point of expectedRoute) {
-      const distance = this.haversineDistance(
+  /**
+   * MAIN RISK CALCULATION
+   * Real-time computation on every location update
+   */
+  async calculateRealTimeRiskScore(userId, currentLocation, isNightMode = false) {
+    try {
+      const userIdStr = userId.toString();
+      
+      // Initialize buffers if needed
+      this.initializeUserBuffers(userIdStr);
+      
+      // Get last 20 location points
+      const previousLocations = this.userLocationBuffer.get(userIdStr) || [];
+      
+      // Add current location to buffer
+      previousLocations.push({
+        ...currentLocation,
+        timestamp: Date.now(),
+      });
+      
+      // Keep only last 20 points
+      if (previousLocations.length > 20) {
+        previousLocations.shift();
+      }
+      this.userLocationBuffer.set(userIdStr, previousLocations);
+      
+      // Compute risk components
+      const breakdown = {
+        routeDeviation: 0,
+        stopDuration: 0,
+        speedEntropy: 0,
+        locationRiskWeight: 0,
+        nightMultiplier: 1,
+      };
+      
+      const anomalies = [];
+      
+      // 1. ROUTE DEVIATION SCORE (0-30)
+      if (previousLocations.length >= 3) {
+        breakdown.routeDeviation = await this.calculateRouteDeviation(
+          userIdStr,
+          currentLocation,
+          previousLocations,
+          anomalies
+        );
+      }
+      
+      // 2. STOP DURATION ANOMALY (0-25)
+      breakdown.stopDuration = await this.calculateStopDurationScore(
+        userIdStr,
+        currentLocation,
+        previousLocations,
+        anomalies
+      );
+      
+      // 3. DRIVING PATTERN ENTROPY (0-20)
+      breakdown.speedEntropy = this.calculateSpeedEntropy(
+        userIdStr,
+        currentLocation.speed,
+        anomalies
+      );
+      
+      // 4. LOCATION RISK WEIGHT (0-15)
+      breakdown.locationRiskWeight = await this.calculateLocationRiskWeight(
         currentLocation.latitude,
         currentLocation.longitude,
-        point.latitude,
-        point.longitude
+        anomalies
       );
-      minDistance = Math.min(minDistance, distance);
+      
+      // 5. NIGHT MODE AMPLIFIER
+      breakdown.nightMultiplier = isNightMode ? this.getNightMultiplier() : 1;
+      
+      // Calculate base score
+      const baseScore =
+        breakdown.routeDeviation +
+        breakdown.stopDuration +
+        breakdown.speedEntropy +
+        breakdown.locationRiskWeight;
+      
+      // Apply night multiplier
+      let finalScore = Math.round(baseScore * breakdown.nightMultiplier);
+      finalScore = Math.min(100, Math.max(0, finalScore));
+      
+      // Determine alert level
+      const alertLevel = this.determineAlertLevel(finalScore, anomalies);
+      
+      // Cache anomalies for this user
+      this.userAnomalies.set(userIdStr, {
+        anomalies,
+        timestamp: Date.now(),
+      });
+      
+      return {
+        score: finalScore,
+        baseScore,
+        breakdown,
+        anomalies,
+        alertLevel,
+        isNightMode,
+        anomalyCount: anomalies.length,
+        multipleAnomalyCategories: this.countAnomalyCategories(anomalies) >= 2,
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      console.error('Risk calculation error:', error);
+      return {
+        score: 0,
+        baseScore: 0,
+        breakdown: { routeDeviation: 0, stopDuration: 0, speedEntropy: 0, locationRiskWeight: 0, nightMultiplier: 1 },
+        anomalies: [],
+        alertLevel: 'safe',
+        error: error.message,
+      };
     }
-
-    const thresholdDistance = 500;
-    const deviationPercent = (minDistance / thresholdDistance) * 100;
-    return Math.min(100, deviationPercent);
   }
 
-  calculateStopDurationScore(userId, currentLocation, previousLocations, anomalies) {
-    const userIdStr = userId.toString();
-    const currentTime = Date.now();
-    const isStationary = currentLocation.speed < 1;
-
-    if (isStationary) {
-      if (!this.userStopInfo.has(userIdStr)) {
-        this.userStopInfo.set(userIdStr, {
-          startTime: currentTime,
-          location: {
-            latitude: currentLocation.latitude,
-            longitude: currentLocation.longitude,
-          },
+  /**
+   * 1️⃣ ROUTE DEVIATION SCORE
+   * 
+   * Build expected route from historical trips.
+   * Compute perpendicular distance from corridor.
+   * Calculate deviation percentage.
+   */
+  async calculateRouteDeviation(userIdStr, currentLocation, previousLocations, anomalies) {
+    try {
+      // Need minimum 5 historical points
+      if (previousLocations.length < 5) {
+        return 0;
+      }
+      
+      // Build route corridor from last 10 points
+      const routePoints = previousLocations.slice(-10).map(loc => ({
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+      }));
+      
+      // Calculate perpendicular distance to route line
+      let minDistance = Infinity;
+      
+      for (let i = 0; i < routePoints.length - 1; i++) {
+        const p1 = routePoints[i];
+        const p2 = routePoints[i + 1];
+        
+        // Distance from current point to line segment (p1-p2)
+        const distance = this.distancePointToLineSegment(
+          currentLocation.latitude,
+          currentLocation.longitude,
+          p1.latitude,
+          p1.longitude,
+          p2.latitude,
+          p2.longitude
+        );
+        
+        minDistance = Math.min(minDistance, distance);
+      }
+      
+      // Deviation threshold: 500 meters
+      const corridorWidth = 500;
+      const deviationPercent = (minDistance / corridorWidth) * 100;
+      const clampedDeviation = Math.min(100, deviationPercent);
+      
+      // Apply thresholds
+      let score = 0;
+      if (clampedDeviation < 10) {
+        score = 0;
+      } else if (clampedDeviation < 25) {
+        score = 10;
+      } else if (clampedDeviation < 40) {
+        score = 20;
+      } else {
+        score = 30;
+      }
+      
+      // Record anomaly if significant deviation
+      if (score >= 20) {
+        anomalies.push({
+          type: 'route_deviation',
+          severity: score >= 25 ? 'high' : 'medium',
+          description: `Route deviation: ${clampedDeviation.toFixed(1)}%`,
+          value: clampedDeviation,
+          distance_meters: minDistance,
         });
       }
+      
+      return score;
+    } catch (error) {
+      console.error('Route deviation calculation error:', error);
+      return 0;
+    }
+  }
 
-      const stopInfo = this.userStopInfo.get(userIdStr);
-      const stopDurationMinutes = (currentTime - stopInfo.startTime) / (1000 * 60);
-
-      let score = 0;
-      for (const threshold of RISK_WEIGHTS.STOP_DURATION.THRESHOLDS) {
-        if (stopDurationMinutes <= threshold.max) {
-          score = threshold.score;
-          break;
+  /**
+   * 2️⃣ STOP DURATION ANOMALY
+   * 
+   * Detect if speed < 2 km/h (stationary).
+   * Track duration in unknown zones.
+   */
+  async calculateStopDurationScore(userIdStr, currentLocation, previousLocations, anomalies) {
+    try {
+      // Speed < 2 km/h indicates stationary
+      const STATIONARY_SPEED_THRESHOLD = 2; // km/h
+      const isStationary = (currentLocation.speed || 0) < STATIONARY_SPEED_THRESHOLD;
+      
+      if (isStationary) {
+        // Check if in tagged location (home, office, etc)
+        const taggedLocations = await TaggedLocation.find({
+          user: userIdStr,
+          isActive: true,
+        });
+        
+        const inTaggedLocation = taggedLocations.some(loc =>
+          loc.isWithinRadius(currentLocation.latitude, currentLocation.longitude)
+        );
+        
+        // If in tagged location, no anomaly
+        if (inTaggedLocation) {
+          this.userStopInfo.delete(userIdStr);
+          return 0;
         }
+        
+        // Track stop duration in unknown zone
+        const stopInfo = this.userStopInfo.get(userIdStr) || {
+          startTime: Date.now(),
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+        };
+        
+        const stopDurationMinutes = (Date.now() - stopInfo.startTime) / (1000 * 60);
+        
+        let score = 0;
+        if (stopDurationMinutes >= 7) {
+          score = 25;
+        } else if (stopDurationMinutes >= 4) {
+          score = 20;
+        } else if (stopDurationMinutes >= 2) {
+          score = 10;
+        } else {
+          score = 0;
+        }
+        
+        // Record anomaly if duration significant
+        if (score >= 10) {
+          anomalies.push({
+            type: 'stop_duration',
+            severity: score >= 20 ? 'high' : 'medium',
+            description: `Stopped in unknown area: ${stopDurationMinutes.toFixed(1)} minutes`,
+            value: stopDurationMinutes,
+          });
+        }
+        
+        // Update stop info
+        this.userStopInfo.set(userIdStr, stopInfo);
+        
+        return score;
+      } else {
+        // User is moving, reset stop tracking
+        this.userStopInfo.delete(userIdStr);
+        return 0;
       }
+    } catch (error) {
+      console.error('Stop duration calculation error:', error);
+      return 0;
+    }
+  }
 
+  /**
+   * 3️⃣ DRIVING PATTERN ENTROPY
+   * 
+   * Maintain rolling speed array (last 10 samples).
+   * Calculate variance for erratic detection.
+   */
+  calculateSpeedEntropy(userIdStr, currentSpeed, anomalies) {
+    try {
+      // Initialize speed buffer
+      if (!this.userSpeedBuffer.has(userIdStr)) {
+        this.userSpeedBuffer.set(userIdStr, []);
+      }
+      
+      const speedBuffer = this.userSpeedBuffer.get(userIdStr);
+      speedBuffer.push(currentSpeed || 0);
+      
+      // Keep only last 10 samples
+      if (speedBuffer.length > 10) {
+        speedBuffer.shift();
+      }
+      
+      // Need minimum 5 samples for variance
+      if (speedBuffer.length < 5) {
+        return 0;
+      }
+      
+      // Calculate variance
+      const variance = this.calculateVariance(speedBuffer);
+      
+      let score = 0;
+      if (variance >= 50) {
+        score = 20;
+      } else if (variance >= 20) {
+        score = 10;
+      } else {
+        score = 0;
+      }
+      
+      // Record anomaly if erratic
       if (score >= 10) {
         anomalies.push({
-          type: 'unexpected_stop',
-          severity: score >= 20 ? 'high' : 'medium',
-          description: `Unexpected stop: ${stopDurationMinutes.toFixed(1)} minutes in unknown area`,
-          value: stopDurationMinutes,
+          type: 'speed_entropy',
+          severity: score >= 15 ? 'high' : 'medium',
+          description: `Erratic speed pattern: variance ${variance.toFixed(2)}`,
+          value: variance,
         });
       }
-
-      return score;
-    } else {
-      this.userStopInfo.delete(userIdStr);
-      return 0;
-    }
-  }
-
-  async calculateSpeedEntropyScore(userId, currentSpeed, anomalies) {
-    const userIdStr = userId.toString();
-
-    if (!this.userSpeedHistory.has(userIdStr)) {
-      this.userSpeedHistory.set(userIdStr, []);
-    }
-
-    const speedHistory = this.userSpeedHistory.get(userIdStr);
-    speedHistory.push(currentSpeed || 0);
-
-    if (speedHistory.length > SPEED_SAMPLE_SIZE) {
-      speedHistory.shift();
-    }
-
-    if (speedHistory.length < SPEED_SAMPLE_SIZE) {
-      return 0;
-    }
-
-    const variance = this.calculateVariance(speedHistory);
-
-    let score = 0;
-    for (const threshold of RISK_WEIGHTS.SPEED_ENTROPY.THRESHOLDS) {
-      if (variance <= threshold.max) {
-        score = threshold.score;
-        break;
-      }
-    }
-
-    if (score >= 10) {
-      anomalies.push({
-        type: 'speed_anomaly',
-        severity: score >= 15 ? 'high' : 'medium',
-        description: `Speed variance anomaly: ${variance.toFixed(2)} (erratic movement pattern)`,
-        value: variance,
-      });
-    }
-
-    return score;
-  }
-
-  async calculateLocationRiskScore(latitude, longitude, anomalies) {
-    try {
-      const riskWeight = await RiskZone.getRiskWeightForLocation(latitude, longitude);
       
-      if (riskWeight > 0) {
+      return score;
+    } catch (error) {
+      console.error('Speed entropy calculation error:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * 4️⃣ LOCATION RISK WEIGHT
+   * 
+   * Check if in high-risk zone geofence.
+   */
+  async calculateLocationRiskWeight(latitude, longitude, anomalies) {
+    try {
+      // Query nearby risk zones
+      const riskZones = await RiskZone.find({
+        isActive: true,
+        geometry: {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: [longitude, latitude],
+            },
+            $maxDistance: 1000, // 1km
+          },
+        },
+      }).limit(5);
+      
+      if (riskZones.length === 0) {
+        return 0;
+      }
+      
+      // Get maximum risk level
+      const maxRisk = Math.max(...riskZones.map(z => z.riskLevel));
+      const score = Math.min(maxRisk, RISK_WEIGHTS.LOCATION_RISK.MAX_SCORE);
+      
+      if (score > 0) {
         anomalies.push({
           type: 'high_risk_zone',
-          severity: riskWeight >= 10 ? 'high' : 'medium',
-          description: `Currently in a high-risk zone (risk level: ${riskWeight})`,
-          value: riskWeight,
+          severity: score >= 10 ? 'high' : 'medium',
+          description: `In high-risk zone (level: ${score})`,
+          value: score,
+          zones: riskZones.map(z => z.name),
         });
       }
-
-      return Math.min(riskWeight, RISK_WEIGHTS.LOCATION_RISK.MAX_SCORE);
+      
+      return score;
     } catch (error) {
+      console.error('Location risk calculation error:', error);
       return 0;
     }
   }
 
+  /**
+   * 5️⃣ NIGHT MODE AMPLIFIER
+   * 
+   * 22:00-24:00 → 1.2x
+   * 00:00-04:00 → 1.5x
+   * 04:00-05:00 → 1.3x
+   */
   getNightMultiplier() {
     const hour = new Date().getHours();
-
-    for (const period of Object.values(NIGHT_MODE.MULTIPLIERS)) {
-      if (period.start <= period.end) {
-        if (hour >= period.start && hour < period.end) {
-          return period.multiplier;
-        }
+    
+    if (hour >= 22 || hour < 5) {
+      if (hour >= 22) {
+        return 1.2; // 22-24
+      } else if (hour < 4) {
+        return 1.5; // 00-04
       } else {
-        if (hour >= period.start || hour < period.end) {
-          return period.multiplier;
-        }
+        return 1.3; // 04-05
       }
     }
-
-    return 1;
+    
+    return 1; // Not night mode
   }
 
-  isNightModeActive() {
-    const hour = new Date().getHours();
-    return hour >= NIGHT_MODE.START_HOUR || hour < NIGHT_MODE.END_HOUR;
-  }
-
+  /**
+   * Determine alert level based on score and anomalies
+   */
   determineAlertLevel(score, anomalies) {
-    const uniqueAnomalyTypes = new Set(anomalies.map((a) => a.type));
-
-    if (score >= RISK_THRESHOLDS.RED && uniqueAnomalyTypes.size >= 2) {
+    const anomalyCategories = new Set(anomalies.map(a => a.type)).size;
+    
+    // RED: ≥80 AND at least 2 anomaly categories
+    if (score >= 80 && anomalyCategories >= 2) {
       return 'red';
-    } else if (score >= RISK_THRESHOLDS.ORANGE) {
+    }
+    
+    // ORANGE: ≥60
+    if (score >= 60) {
       return 'orange';
-    } else if (score >= RISK_THRESHOLDS.ELEVATED) {
+    }
+    
+    // ELEVATED: ≥40
+    if (score >= 40) {
       return 'elevated';
     }
+    
     return 'safe';
   }
 
-  setExpectedRoute(userId, route) {
-    this.expectedRoutes.set(userId.toString(), route);
+  /**
+   * Helper: Count unique anomaly categories
+   */
+  countAnomalyCategories(anomalies) {
+    return new Set(anomalies.map(a => a.type)).size;
   }
 
-  clearExpectedRoute(userId) {
-    this.expectedRoutes.delete(userId.toString());
+  /**
+   * Helper: Calculate distance from point to line segment
+   */
+  distancePointToLineSegment(px, py, x1, y1, x2, y2) {
+    const A = px - x1;
+    const B = py - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+    
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    
+    let param = -1;
+    if (lenSq !== 0) param = dot / lenSq;
+    
+    let xx, yy;
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+    
+    const dx = px - xx;
+    const dy = py - yy;
+    
+    return Math.sqrt(dx * dx + dy * dy) * 111000; // Convert degrees to meters
   }
 
-  clearUserData(userId) {
-    const userIdStr = userId.toString();
-    this.expectedRoutes.delete(userIdStr);
-    this.userSpeedHistory.delete(userIdStr);
-    this.userStopInfo.delete(userIdStr);
-  }
-
+  /**
+   * Helper: Haversine distance
+   */
   haversineDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371e3;
+    const R = 6371e3; // meters
     const φ1 = (lat1 * Math.PI) / 180;
     const φ2 = (lat2 * Math.PI) / 180;
     const Δφ = ((lat2 - lat1) * Math.PI) / 180;
     const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-
+    
     const a =
       Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
       Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
+    
     return R * c;
   }
 
+  /**
+   * Helper: Calculate variance
+   */
   calculateVariance(values) {
     if (values.length === 0) return 0;
     const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    const squaredDiffs = values.map((v) => Math.pow(v - mean, 2));
+    const squaredDiffs = values.map(v => Math.pow(v - mean, 2));
     return squaredDiffs.reduce((a, b) => a + b, 0) / values.length;
   }
 
-  injectDeviation(userId, deviationPercent) {
+  /**
+   * Clear user data on logout
+   */
+  clearUserData(userId) {
     const userIdStr = userId.toString();
-    const currentRoute = this.expectedRoutes.get(userIdStr) || [];
-    
-    if (currentRoute.length > 0) {
-      return {
-        injected: true,
-        deviationPercent,
-        message: `Simulated ${deviationPercent}% route deviation`,
-      };
-    }
-    return { injected: false, message: 'No expected route set' };
+    this.userLocationBuffer.delete(userIdStr);
+    this.userRouteClusters.delete(userIdStr);
+    this.userStopInfo.delete(userIdStr);
+    this.userSpeedBuffer.delete(userIdStr);
+    this.userAnomalies.delete(userIdStr);
   }
 
-  injectStop(userId, durationMinutes) {
-    const userIdStr = userId.toString();
-    const startTime = Date.now() - durationMinutes * 60 * 1000;
-    
-    this.userStopInfo.set(userIdStr, {
-      startTime,
-      location: { latitude: 0, longitude: 0 },
-      simulated: true,
-    });
-
-    return {
-      injected: true,
-      durationMinutes,
-      message: `Simulated ${durationMinutes} minute stop`,
-    };
-  }
-
-  injectSpeedEntropy(userId, varianceLevel) {
-    const userIdStr = userId.toString();
-    const erraticSpeeds = [];
-    
-    for (let i = 0; i < SPEED_SAMPLE_SIZE; i++) {
-      const baseSpeed = 30;
-      const variance = (Math.random() - 0.5) * varianceLevel * 2;
-      erraticSpeeds.push(Math.max(0, baseSpeed + variance));
+  /**
+   * Initialize user buffers
+   */
+  initializeUserBuffers(userIdStr) {
+    if (!this.userLocationBuffer.has(userIdStr)) {
+      this.userLocationBuffer.set(userIdStr, []);
     }
-
-    this.userSpeedHistory.set(userIdStr, erraticSpeeds);
-
-    return {
-      injected: true,
-      varianceLevel,
-      message: `Simulated speed entropy with variance level ${varianceLevel}`,
-    };
+    if (!this.userSpeedBuffer.has(userIdStr)) {
+      this.userSpeedBuffer.set(userIdStr, []);
+    }
   }
 }
 

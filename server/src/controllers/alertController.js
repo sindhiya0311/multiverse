@@ -1,14 +1,14 @@
-import { alertService } from '../services/index.js';
+import alertEngine from '../services/AlertEngine.js';
 import Alert from '../models/Alert.js';
 import { asyncHandler, AppError } from '../middleware/errorHandler.js';
 
 export const triggerSOS = asyncHandler(async (req, res) => {
   const { latitude, longitude, message } = req.body;
 
-  const alert = await alertService.triggerSOSAlert(
+  const alert = await alertEngine.triggerSOS(
     req.userId,
     { latitude, longitude },
-    message
+    message || ''
   );
 
   res.status(201).json({
@@ -46,7 +46,7 @@ export const getMyAlerts = asyncHandler(async (req, res) => {
 });
 
 export const getActiveAlerts = asyncHandler(async (req, res) => {
-  const alerts = await alertService.getActiveAlertsForUser(req.userId);
+  const alerts = await alertEngine.getActiveAlerts(req.userId);
 
   res.json({
     success: true,
@@ -57,10 +57,7 @@ export const getActiveAlerts = asyncHandler(async (req, res) => {
 export const getFamilyAlerts = asyncHandler(async (req, res) => {
   const { activeOnly = false, limit = 50 } = req.query;
 
-  const alerts = await alertService.getFamilyAlerts(req.userId, {
-    activeOnly: activeOnly === 'true',
-    limit: parseInt(limit),
-  });
+  const alerts = await alertEngine.getFamilyAlerts(req.userId, activeOnly === 'true');
 
   res.json({
     success: true,
@@ -71,7 +68,7 @@ export const getFamilyAlerts = asyncHandler(async (req, res) => {
 export const acknowledgeAlert = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const alert = await alertService.acknowledgeAlert(id, req.userId);
+  const alert = await alertEngine.acknowledgeAlert(id, req.userId);
 
   res.json({
     success: true,
@@ -93,7 +90,7 @@ export const resolveAlert = asyncHandler(async (req, res) => {
     throw new AppError('Invalid resolution type', 400);
   }
 
-  const alert = await alertService.resolveAlert(id, req.userId, resolution, notes);
+  const alert = await alertEngine.resolveAlert(id, req.userId, resolution, notes || '');
 
   res.json({
     success: true,
@@ -106,7 +103,7 @@ export const markAsFalseAlarm = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { notes } = req.body;
 
-  const alert = await alertService.markAsFalseAlarm(id, req.userId, notes);
+  const alert = await alertEngine.resolveAlert(id, req.userId, 'false_alarm', notes || '');
 
   res.json({
     success: true,

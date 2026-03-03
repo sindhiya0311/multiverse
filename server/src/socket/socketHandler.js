@@ -1,5 +1,7 @@
 import { authenticateSocket } from '../middleware/auth.js';
-import { riskEngine, contextEngine, alertService, simulationService } from '../services/index.js';
+import { riskEngine, contextEngine } from '../services/index.js';
+import alertEngine from '../services/AlertEngine.js';
+import dataProcessor from '../services/DataProcessor.js';
 import User from '../models/User.js';
 import LocationLog from '../models/LocationLog.js';
 import FamilyConnection from '../models/FamilyConnection.js';
@@ -9,7 +11,8 @@ const connectedUsers = new Map();
 const userSockets = new Map();
 
 export const initializeSocket = (io) => {
-  alertService.setSocketIO(io);
+  alertEngine.setSocketIO(io);
+  dataProcessor.setSocketIO(io);
 
   io.use(authenticateSocket);
 
@@ -42,129 +45,18 @@ export const initializeSocket = (io) => {
 
     socket.on('location:update', async (data) => {
       try {
-        const { latitude, longitude, speed, accuracy, heading, altitude } = data;
+        // NEW: Use DataProcessor to orchestrate all location processing
+        const result = await dataProcessor.processLocationUpdate(userId, data);
 
-        const currentLocation = {
-          latitude,
-          longitude,
-          speed: speed || 0,
-          accuracy: accuracy || 0,
-          heading: heading || 0,
-          altitude: altitude || 0,
-          timestamp: new Date(),
-        };
-
-        const previousLocations = await LocationLog.getRecentLogs(userId, 20);
-
-        const riskResult = await riskEngine.calculateRiskScore(
-          userId,
-          currentLocation,
-          previousLocations
-        );
-
-        const contextResult = await contextEngine.generateStatus(
-          userId,
-          currentLocation,
-          previousLocations
-        );
-
-        const locationLog = await LocationLog.create({
-          user: userId,
-          ...currentLocation,
-          isNightMode: riskResult.isNightMode,
-          riskScore: riskResult.score,
-          riskBreakdown: riskResult.breakdown,
-          status: contextResult.status,
-          contextualInfo: {
-            nearbyTaggedLocation: contextResult.nearbyTaggedLocation,
-            isMoving: contextResult.isMoving,
-            isStationary: contextResult.isStationary,
-            stationaryDuration: contextResult.stationaryDuration,
-            travellingFrom: contextResult.travellingFrom,
-            travellingTo: contextResult.travellingTo,
-          },
-          anomalies: riskResult.anomalies,
-        });
-
-        await User.findByIdAndUpdate(userId, {
-          lastKnownLocation: {
-            latitude,
-            longitude,
-            timestamp: currentLocation.timestamp,
-            accuracy: currentLocation.accuracy,
-          },
-          currentRiskScore: riskResult.score,
-          currentStatus: contextResult.status,
-          isNightModeActive: riskResult.isNightMode,
-        });
-
-        socket.emit('location:processed', {
-          location: locationLog,
-          risk: {
-            score: riskResult.score,
-            breakdown: riskResult.breakdown,
-            alertLevel: riskResult.alertLevel,
-            anomalies: riskResult.anomalies,
-            isNightMode: riskResult.isNightMode,
-          },
-          context: contextResult,
-        });
-
-        await broadcastToFamily(io, userId, 'family:location:update', {
-          memberId: userId,
-          memberName: user.name,
-          location: {
-            latitude,
-            longitude,
-            timestamp: currentLocation.timestamp,
-          },
-          riskScore: riskResult.score,
-          status: contextResult.status,
-          isNightMode: riskResult.isNightMode,
-          alertLevel: riskResult.alertLevel,
-        });
-
-        if (riskResult.alertLevel === 'red') {
-          const alert = await alertService.triggerShadowAlert(
-            userId,
-            riskResult,
-            currentLocation
-          );
-          
-          socket.emit('alert:triggered', {
-            alertId: alert._id,
-            severity: alert.severity,
-            riskScore: riskResult.score,
+        if (!result.success) {
+          socket.emit('error', {
+            message: 'Failed to process location update',
+            reason: result.reason,
           });
         }
-
-        io.to('admin:dashboard').emit('user:update', {
-          userId,
-          name: user.name,
-          location: { latitude, longitude },
-          riskScore: riskResult.score,
-          status: contextResult.status,
-          isNightMode: riskResult.isNightMode,
-        });
-
       } catch (error) {
         console.error('Location update error:', error);
         socket.emit('error', { message: 'Failed to process location update' });
-      }
-    });
-
-    socket.on('simulation:tick', async () => {
-      try {
-        const location = simulationService.getNextLocation(userId);
-        
-        if (!location) {
-          socket.emit('simulation:ended');
-          return;
-        }
-
-        socket.emit('location:update', location);
-      } catch (error) {
-        socket.emit('error', { message: 'Simulation tick failed' });
       }
     });
 
@@ -172,10 +64,10 @@ export const initializeSocket = (io) => {
       try {
         const { latitude, longitude, message } = data;
 
-        const alert = await alertService.triggerSOSAlert(
+        const alert = await alertEngine.triggerSOS(
           userId,
           { latitude, longitude },
-          message
+          message || ''
         );
 
         socket.emit('sos:confirmed', {
@@ -184,6 +76,7 @@ export const initializeSocket = (io) => {
         });
 
       } catch (error) {
+        console.error('SOS trigger error:', error);
         socket.emit('error', { message: 'Failed to trigger SOS' });
       }
     });
@@ -191,10 +84,22 @@ export const initializeSocket = (io) => {
     socket.on('alert:acknowledge', async (data) => {
       try {
         const { alertId } = data;
-        await alertService.acknowledgeAlert(alertId, userId);
+        await alertEngine.acknowledgeAlert(alertId, userId);
         socket.emit('alert:acknowledged', { alertId });
       } catch (error) {
+        console.error('Alert acknowledge error:', error);
         socket.emit('error', { message: 'Failed to acknowledge alert' });
+      }
+    });
+
+    socket.on('alert:resolve', async (data) => {
+      try {
+        const { alertId, resolution, notes } = data;
+        await alertEngine.resolveAlert(alertId, userId, resolution || 'safe', notes || '');
+        socket.emit('alert:resolved', { alertId });
+      } catch (error) {
+        console.error('Alert resolve error:', error);
+        socket.emit('error', { message: 'Failed to resolve alert' });
       }
     });
 
@@ -223,7 +128,6 @@ export const initializeSocket = (io) => {
 
       riskEngine.clearUserData(userId);
       contextEngine.clearUserData(userId);
-      simulationService.stopSimulation(userId);
 
       await notifyFamilyPresence(io, userId, false);
     });
